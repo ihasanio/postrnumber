@@ -238,9 +238,9 @@ def update_config(payload: Dict[str, Any]):
         state["method"] = payload["method"].strip().upper()
     if "interval_seconds" in payload:
         state["interval_seconds"] = max(0.01, float(payload["interval_seconds"]))
-    if "headers_raw" in payload:
+    if "headers_raw" in payload and payload["headers_raw"].strip():
         state["headers_raw"] = payload["headers_raw"]
-    if "body_raw" in payload:
+    if "body_raw" in payload and payload["body_raw"].strip():
         state["body_raw"] = payload["body_raw"]
     if "workers" in payload:
         state["workers"] = max(1, min(50, int(payload["workers"])))
@@ -717,11 +717,25 @@ def index_html():
     }
 
     async function startRunner() {
-      await fetch('/api/start', {
-        method: 'POST',
-        headers: {'Content-Type':'application/json'},
-        body: JSON.stringify(getPayloadFromUI())
-      });
+      const btn = document.getElementById('btnStart');
+      btn.textContent = '⏳ Başlatılıyor...';
+      btn.disabled = true;
+      try {
+        const resp = await fetch('/api/start', {
+          method: 'POST',
+          headers: {'Content-Type':'application/json'},
+          body: JSON.stringify(getPayloadFromUI())
+        });
+        if (!resp.ok) {
+          const err = await resp.text();
+          alert('Sunucu hatası: ' + err);
+        }
+      } catch(e) {
+        alert('Bağlantı hatası: ' + e);
+      } finally {
+        btn.textContent = '▶ DÖNGÜYÜ BAŞLAT';
+        btn.disabled = false;
+      }
       fetchState();
     }
 
