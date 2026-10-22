@@ -19,7 +19,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-BIG_PAYLOAD_PATH = r"C:\Users\User\Desktop\7xwon_API\big_payload.json"
+BIG_PAYLOAD_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "big_payload.json")
 
 # State
 state = {
@@ -607,4 +607,5 @@ def index_html():
 """
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="127.0.0.1", port=8083)
+    port = int(os.environ.get("PORT", 8083))
+    uvicorn.run("custom_post_runner:app", host="0.0.0.0", port=port)
