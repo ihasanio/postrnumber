@@ -528,6 +528,7 @@ def index_html():
 
   <script>
     let isEditing = false;
+    let firstLoaded = false;  // ilk yüklemede her zaman doldur
 
     const presets = {
       '7xwon_main': {
@@ -619,12 +620,17 @@ def index_html():
           badge.className = "px-4 py-1.5 rounded-full text-xs font-bold bg-rose-950 text-rose-300 border border-rose-800";
         }
 
-        if (!isEditing) {
-          if (!document.getElementById('inputUrl').value) document.getElementById('inputUrl').value = data.url;
-          if (!document.getElementById('inputInterval').value) document.getElementById('inputInterval').value = data.interval_seconds;
-          if (!document.getElementById('inputHeaders').value) document.getElementById('inputHeaders').value = data.headers_raw;
-          if (!document.getElementById('inputBody').value) { document.getElementById('inputBody').value = data.body_raw; updateBodySize(); }
-          if (!document.getElementById('inputMethod').value) document.getElementById('inputMethod').value = data.method;
+        if (!isEditing || !firstLoaded) {
+          document.getElementById('inputUrl').value = data.url || '';
+          document.getElementById('inputInterval').value = data.interval_seconds || 0.1;
+          document.getElementById('inputHeaders').value = data.headers_raw || '';
+          document.getElementById('inputBody').value = data.body_raw || '';
+          updateBodySize();
+          document.getElementById('inputMethod').value = data.method || 'POST';
+          const w = Math.max(1, parseInt(data.workers) || 1);
+          document.getElementById('inputWorkers').value = w;
+          document.getElementById('workerVal').textContent = w;
+          firstLoaded = true;
         }
 
         document.getElementById('statTotal').textContent = data.total_requests;
