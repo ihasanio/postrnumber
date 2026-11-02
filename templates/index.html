@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Load Tester</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <main class="shell">
+    <header class="topbar">
+      <div class="brand">
+        <span class="dot"></span>
+        <h1>Load Tester</h1>
+        <span class="sub">yuk / latency testi</span>
+      </div>
+      <div class="machine">
+        <div><span>OS</span><strong>{{ profile.os }}</strong></div>
+        <div><span>CPU</span><strong>{{ profile.cores }} cekirdek</strong></div>
+        <div><span>RAM</span><strong>{% if profile.memory_gib %}{{ profile.memory_gib }} GiB{% else %}-{% endif %}</strong></div>
+        <button id="apply-suggestion" type="button" class="ghost">Oneriyi uygula</button>
+      </div>
+    </header>
+
+    <section class="workspace">
+      <form id="test-form" class="card config" autocomplete="off">
+        <div class="field full">
+          <label for="url">Hedef URL</label>
+          <div style="display: flex; gap: 8px; margin-bottom: 6px;">
+            <button type="button" id="preset-main" class="ghost" style="font-size: 11px; padding: 4px 8px;">1. Ana Liste (/api/main-events)</button>
+            <button type="button" id="preset-event" class="ghost" style="font-size: 11px; padding: 4px 8px;">4. Tek Maç Detayı (/api/event)</button>
+          </div>
+          <input id="url" name="url" value="https://www.7xwon.com/api/main-events" required spellcheck="false">
+        </div>
+
+        <div class="field">
+          <label for="method">Method</label>
+          <select id="method" name="method">
+            <option>GET</option><option>POST</option><option>PUT</option>
+            <option>PATCH</option><option>DELETE</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="token">Bearer token <small>opsiyonel</small></label>
+          <input id="token" name="token" type="password" placeholder="sadece bu testte">
+        </div>
+
+        <div class="field full">
+          <label for="user_agent">User-Agent <small>Cloudflare icin tarayici ile birebir olmali</small></label>
+          <input id="user_agent" name="user_agent" value="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36" spellcheck="false">
+        </div>
+
+        <div class="field full">
+          <label for="cookie">Cookie / cf_clearance <small>Opsiyonel (device_id=...; cf_clearance=...)</small></label>
+          <input id="cookie" name="cookie" placeholder="device_id=...; cf_clearance=..." spellcheck="false">
+        </div>
+
+        <div class="grid4">
+          <div class="field"><label for="rps">RPS <small>max 1000</small></label><input id="rps" name="rps" type="number" min="1" max="1000" value="100"></div>
+          <div class="field"><label for="threads">Worker <small>max 100</small></label><input id="threads" name="threads" type="number" min="1" max="100" value="30"></div>
+          <div class="field"><label for="duration">Sure <small>sn</small></label><input id="duration" name="duration" type="number" min="1" max="3600" value="300"></div>
+          <div class="field"><label for="timeout">Timeout <small>sn</small></label><input id="timeout" name="timeout" type="number" min="1" max="30" value="{{ profile.suggested.timeout }}"></div>
+        </div>
+
+        <div class="field full scenarios-wrap">
+          <label>Aktif Test Modülleri (Seçtiklerin Bu Run'da Çalışır)</label>
+          <div class="scenarios-grid">
+            <label class="scenario-card">
+              <input type="checkbox" id="sc_main" name="sc_main" checked>
+              <div class="sc-content">
+                <strong>Ana Liste (/main-events)</strong>
+                <small>100 maçlık bülten ve canlı oran akışını zorlar</small>
+              </div>
+            </label>
+            <label class="scenario-card">
+              <input type="checkbox" id="sc_all_matches" name="sc_all_matches" checked>
+              <div class="sc-content">
+                <strong>Tüm Canlı Maçlar (/event)</strong>
+                <small>Canlıdaki tüm maçları çekip farklı maçlara aynı anda yüklenir</small>
+              </div>
+            </label>
+            <label class="scenario-card">
+              <input type="checkbox" id="sc_cascading" name="sc_cascading">
+              <div class="sc-content">
+                <strong>Cascading Abort (1. Kural / Stampede)</strong>
+                <small>2.5s gecikmede iptal edip hemen yenisini ateşler</small>
+              </div>
+            </label>
+          </div>
+        </div>
+
+        <div class="field full">
+          <label for="body">JSON body <small>POST / PUT / PATCH (Özelleştirilmiş)</small></label>
+          <textarea id="body" name="body" spellcheck="false" placeholder='{"key":"value"}'>{
+  "type": 0,
+  "odds": 1,
+  "code": false,
+  "s": 1,
+  "t": false
+}</textarea>
+        </div>
+
+        <label class="confirm full">
+          <input id="confirm" type="checkbox">
+          <span>Bu endpoint icin test yetkim var.</span>
+        </label>
+
+        <button class="run full" type="submit">Testi baslat</button>
+        <button class="stop full" id="stop-btn" type="button" hidden>Durdur</button>
+      </form>
+
+      <aside class="card result" aria-live="polite">
+        <div class="result-head">
+          <div>
+            <p class="kicker">Sonuc</p>
+            <h2 id="result-title">Henuz test yok</h2>
+            <p id="result-note" class="note">Ayarlari girip testi baslat.</p>
+          </div>
+          <span id="status-badge" class="badge idle">hazir</span>
+        </div>
+
+        <div id="progress-wrap" class="progress-wrap" hidden>
+          <div class="progress-track"><div id="progress-bar" class="progress-bar"></div></div>
+          <div class="progress-meta"><span id="progress-elapsed">0.0s</span><span id="progress-total"></span></div>
+        </div>
+
+        <div id="tiles" class="tiles"></div>
+
+        <div id="chart-wrap" class="chart-wrap" hidden>
+          <div class="chart-head"><span>Latency (son istekler)</span><span id="chart-max"></span></div>
+          <canvas id="live-chart" class="chart" height="150"></canvas>
+        </div>
+
+        <div id="statuses" class="statuses"></div>
+        <p id="error-sample" class="error-sample" hidden></p>
+      </aside>
+    </section>
+  </main>
+
+  <script>window.SYSTEM_PROFILE = {{ profile|tojson }};</script>
+  <script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>

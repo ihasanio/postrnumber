@@ -1,3 +1,5 @@
-fastapi>=0.110.0
-uvicorn[standard]>=0.28.0
+requests==2.32.4
+Flask==3.1.0
+waitress==3.0.2
+psutil==6.1.1
 curl_cffi>=0.7.0b4
